@@ -8,7 +8,9 @@ mpdd.sh -> bash Script for Android to display song track name in both notificati
 <br><br>
 Preview:
 <br><br>
-https://github.com/user-attachments/assets/2c88f15e-5cb9-44ff-89b2-99d163b4d2ee
+https://github.com/user-attachments/assets/dadcc595-35c2-46a3-86b0-2121c76628ba
+
+
 
 
 
