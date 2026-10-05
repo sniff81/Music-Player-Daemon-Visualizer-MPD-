@@ -10,43 +10,58 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#define NUM_BARS 20
-#define BAR_GAP 1        // 1 space gap between columns
+#define NUM_BARS 30          // Change to any integer (e.g. 10, 16, 24, 32, 40)
+#define BAR_GAP 1            // Space gap between columns
+#define BAR_WIDTH 2          // Number of half-block characters per bar
+#define BAR_LENGTH_SCALE 1.0f // Multiplier to adjust overall bar height/length
 #define SAMPLE_RATE 44100
-#define BUFFER_SIZE 2048 // ~21.53Hz per FFT bin
+#define BUFFER_SIZE 2048     // ~21.53Hz per FFT bin
 
 #define GRAD_STEPS 32
 
-// 20 columns spanning 30Hz to 15kHz horizontally mirrored (Low outer, High center)
-const int BAND_RANGES[NUM_BARS][2] = {
-    // Cols 1-10 (Low -> High)
-    {1, 2},     // ~21 Hz   - 55 Hz
-    {3, 4},     // ~55 Hz   - 104 Hz
-    {5, 8},     // ~104 Hz  - 193 Hz
-    {9, 16},    // ~193 Hz  - 359 Hz
-    {17, 30},   // ~359 Hz  - 671 Hz
-    {31, 57},   // ~671 Hz  - 1251 Hz
-    {58, 107},  // ~1251 Hz - 2331 Hz
-    {108, 201}, // ~2331 Hz - 4343 Hz
-    {202, 375}, // ~4343 Hz - 8091 Hz
-    {376, 697}, // ~8091 Hz - 15000 Hz
-    // Cols 11-20 (High -> Low)
-    {376, 697}, // ~8091 Hz - 15000 Hz
-    {202, 375}, // ~4343 Hz - 8091 Hz
-    {108, 201}, // ~2331 Hz - 4343 Hz
-    {58, 107},  // ~1251 Hz - 2331 Hz
-    {31, 57},   // ~671 Hz  - 1251 Hz
-    {17, 30},   // ~359 Hz  - 671 Hz
-    {9, 16},    // ~193 Hz  - 359 Hz
-    {5, 8},     // ~104 Hz  - 193 Hz
-    {3, 4},     // ~55 Hz   - 104 Hz
-    {1, 2}      // ~21 Hz   - 55 Hz
-};
+// Dynamic frequency range & boost tables
+int band_ranges[NUM_BARS][2];
+float band_boost[NUM_BARS];
 
-const float BAND_BOOST[NUM_BARS] = {
-    1.0f, 1.0f, 1.0f, 1.1f, 1.3f, 1.5f, 1.8f, 2.2f, 2.8f, 3.5f,
-    3.5f, 2.8f, 2.2f, 1.8f, 1.5f, 1.3f, 1.1f, 1.0f, 1.0f, 1.0f
-};
+// Dynamically generate logarithmic frequency bands mirrored horizontally (Low outer, High center)
+void init_bands(int num_bars) {
+    int half = num_bars / 2;
+    int min_bin = 1;   // ~21.5 Hz
+    int max_bin = 700; // ~15 kHz
+
+    double log_min = log((double)min_bin);
+    double log_max = log((double)max_bin);
+
+    for (int i = 0; i < half; i++) {
+        double start_f = exp(log_min + (log_max - log_min) * ((double)i / half));
+        double end_f   = exp(log_min + (log_max - log_min) * ((double)(i + 1) / half));
+
+        int b_start = (int)start_f;
+        int b_end   = (int)end_f;
+        if (b_end <= b_start) b_end = b_start;
+
+        // Outer to Center (Left side)
+        band_ranges[i][0] = b_start;
+        band_ranges[i][1] = b_end;
+
+        // Center to Outer (Right side mirrored)
+        int mirror_idx = num_bars - 1 - i;
+        band_ranges[mirror_idx][0] = b_start;
+        band_ranges[mirror_idx][1] = b_end;
+
+        // Dynamic boost scaling from 1.0 (bass) to 3.5 (treble)
+        float boost_val = 1.0f + 2.5f * ((float)i / (float)(half > 1 ? half - 1 : 1));
+        band_boost[i] = boost_val;
+        band_boost[mirror_idx] = boost_val;
+    }
+
+    // Odd bar fallback for middle bar
+    if (num_bars % 2 != 0) {
+        band_ranges[half][0] = max_bin / 2;
+        band_ranges[half][1] = max_bin;
+        band_boost[half] = 3.5f;
+    }
+}
 
 // Threading & Now Playing state
 char now_playing[256] = "";
@@ -54,7 +69,6 @@ pthread_mutex_t np_mutex = PTHREAD_MUTEX_INITIALIZER;
 volatile int keep_running = 1;
 
 void* now_playing_worker(void* arg) {
-    // Direct mpc query targeting port 8600
     const char* cmd = "mpc -p 8600 current 2>/dev/null";
 
     while (keep_running) {
@@ -62,7 +76,7 @@ void* now_playing_worker(void* arg) {
         char buf[256] = {0};
         if (fp) {
             if (fgets(buf, sizeof(buf) - 1, fp) != NULL) {
-                buf[strcspn(buf, "\r\n")] = 0; // Strip trailing newline
+                buf[strcspn(buf, "\r\n")] = 0;
             }
             pclose(fp);
         }
@@ -71,9 +85,8 @@ void* now_playing_worker(void* arg) {
         strncpy(now_playing, buf, sizeof(now_playing) - 1);
         pthread_mutex_unlock(&np_mutex);
 
-        // Poll every 500ms
         for (int i = 0; i < 5 && keep_running; i++) {
-            usleep(100000); // 100ms chunks
+            usleep(100000);
         }
     }
     return NULL;
@@ -83,25 +96,24 @@ void init_gradient_colors() {
     start_color();
     use_default_colors();
 
-    // Reversed Palette Keyframes mapped to ncurses 0..1000 scale:
-    // 0: #8de41c -> (553, 894, 110)
-    // 1: #f6287d -> (965, 157, 490)
-    // 2: #b915cc -> (725,  82, 800)
-    // 3: #210456 -> (129,  16, 337)
-    // 4: #0a0324 -> ( 39,  12, 141)
+    // Palette Keyframes mapped across ncurses 0..1000 RGB scale:
+    // 0: YellowGreen -> #8de41c (553, 894, 110)
+    // 1: Yellow      -> #ffff00 (1000, 1000, 0)
+    // 2: Orange      -> #ffa500 (1000, 647, 0)
+    // 3: Orange-Red  -> #ff4500 (1000, 271, 0)
+    // 4: Bright Red  -> #ff0000 (1000, 0, 0)
     static const float palette[5][3] = {
-        {553.0f, 894.0f, 110.0f},
-        {965.0f, 157.0f, 490.0f},
-        {725.0f,  82.0f, 800.0f},
-        {129.0f,  16.0f, 337.0f},
-        { 39.0f,  12.0f, 141.0f}
+        {553.0f,  894.0f, 110.0f},
+        {1000.0f, 1000.0f,   0.0f},
+        {1000.0f,  647.0f,   0.0f},
+        {1000.0f,  271.0f,   0.0f},
+        {1000.0f,    0.0f,   0.0f}
     };
 
     if (has_colors() && can_change_color()) {
         for (int pos = 0; pos < GRAD_STEPS; pos++) {
             float t = (float)pos / (float)(GRAD_STEPS - 1);
             
-            // Map t [0..1] across 4 segments
             float scaled = t * 4.0f;
             int idx = (int)scaled;
             if (idx >= 4) idx = 3;
@@ -123,17 +135,17 @@ void init_gradient_colors() {
             float t = (float)pos / (float)(GRAD_STEPS - 1);
 
             int color_code;
-            if (t < 0.10f)      color_code = 118; // Neon green
-            else if (t < 0.25f) color_code = 198; // Neon pink
-            else if (t < 0.50f) color_code = 128; // Bright magenta
-            else if (t < 0.75f) color_code = 54;  // Deep violet
-            else                color_code = 234; // Deep purple-black
+            if (t < 0.20f)      color_code = 118; // YellowGreen
+            else if (t < 0.45f) color_code = 226; // Yellow
+            else if (t < 0.70f) color_code = 208; // Orange
+            else if (t < 0.88f) color_code = 202; // Orange-Red
+            else                color_code = 196; // Bright Red
 
             init_pair(pair_id, color_code, -1);
         }
     } else {
         for (int i = 1; i <= GRAD_STEPS; i++) {
-            init_pair(i, COLOR_MAGENTA, -1);
+            init_pair(i, COLOR_RED, -1);
         }
     }
 }
@@ -148,6 +160,7 @@ int get_gradient_color(float pos_ratio) {
 
 int main() {
     setlocale(LC_ALL, "");
+    init_bands(NUM_BARS);
 
     static const pa_sample_spec ss = {
         .format = PA_SAMPLE_S16LE,
@@ -157,7 +170,7 @@ int main() {
 
     int pa_error;
     pa_simple *pa_stream = pa_simple_new(
-        NULL, "20-Bar Visualizer", PA_STREAM_RECORD, 
+        NULL, "Audio Visualizer", PA_STREAM_RECORD, 
         NULL, "Spectrum", &ss, NULL, NULL, &pa_error
     );
 
@@ -185,12 +198,14 @@ int main() {
 
     init_gradient_colors();
 
-    // Start background MPD listener thread
     pthread_t np_thread;
     pthread_create(&np_thread, NULL, now_playing_worker, NULL);
 
-    float heights[NUM_BARS] = {0};
-    float peaks[NUM_BARS] = {0};
+    float heights[NUM_BARS];
+    float peaks[NUM_BARS];
+    memset(heights, 0, sizeof(heights));
+    memset(peaks, 0, sizeof(peaks));
+
     int ch;
 
     while ((ch = getch()) != 'q' && ch != 'Q') {
@@ -208,16 +223,12 @@ int main() {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
 
-        // Reserve row (rows - 1) for track info at bottom
         int visual_area = rows - 2;
         int center_y = visual_area / 2;
         int max_height = center_y; 
         if (max_height < 2) max_height = 2;
 
-        int bar_width = (cols - (NUM_BARS - 1) * BAR_GAP) / NUM_BARS;
-        if (bar_width < 1) bar_width = 1;
-
-        int total_width = (NUM_BARS * bar_width) + ((NUM_BARS - 1) * BAR_GAP);
+        int total_width = (NUM_BARS * BAR_WIDTH) + ((NUM_BARS - 1) * BAR_GAP);
         int start_x = (cols - total_width) / 2;
         if (start_x < 0) start_x = 0;
 
@@ -225,8 +236,8 @@ int main() {
 
         for (int i = 0; i < NUM_BARS; i++) {
             double band_sum = 0;
-            int min_bin = BAND_RANGES[i][0];
-            int max_bin = BAND_RANGES[i][1];
+            int min_bin = band_ranges[i][0];
+            int max_bin = band_ranges[i][1];
             int bin_count = max_bin - min_bin + 1;
 
             for (int b = min_bin; b <= max_bin; b++) {
@@ -236,10 +247,10 @@ int main() {
                 band_sum += mag;
             }
 
-            double avg_mag = (band_sum / bin_count) * BAND_BOOST[i];
+            double avg_mag = (band_sum / bin_count) * band_boost[i];
 
             float compressed_mag = log10f(1.0f + (float)avg_mag);
-            float target = (float)(compressed_mag * max_height * 0.85f);
+            float target = (float)(compressed_mag * max_height * 0.85f * BAR_LENGTH_SCALE);
             if (target > max_height) target = (float)max_height;
 
             if (target > heights[i]) {
@@ -257,15 +268,14 @@ int main() {
             }
 
             int current_height = (int)heights[i];
-            int x_pos = start_x + i * (bar_width + BAR_GAP);
+            int x_pos = start_x + i * (BAR_WIDTH + BAR_GAP);
 
-            // Render bars growing symmetrically UP and DOWN from center_y
             for (int y = 0; y < current_height; y++) {
                 float pos_ratio = (float)y / (float)max_height;
                 int color = get_gradient_color(pos_ratio);
 
                 attron(COLOR_PAIR(color) | A_BOLD);
-                for (int bw = 0; bw < bar_width; bw++) {
+                for (int bw = 0; bw < BAR_WIDTH; bw++) {
                     if (center_y - y >= 0) {
                         mvprintw(center_y - y, x_pos + bw, "▀");
                     }
@@ -276,14 +286,13 @@ int main() {
                 attroff(COLOR_PAIR(color) | A_BOLD);
             }
 
-            // Render mirrored peak indicators
             int peak_y = (int)peaks[i];
             if (peak_y > 0 && peak_y < max_height) {
                 float peak_pos_ratio = (float)peak_y / (float)max_height;
                 int peak_color = get_gradient_color(peak_pos_ratio);
 
                 attron(COLOR_PAIR(peak_color) | A_BOLD);
-                for (int bw = 0; bw < bar_width; bw++) {
+                for (int bw = 0; bw < BAR_WIDTH; bw++) {
                     if (center_y - peak_y >= 0) {
                         mvprintw(center_y - peak_y, x_pos + bw, "▀");
                     }
@@ -295,7 +304,6 @@ int main() {
             }
         }
 
-        // Render MPD track string centered at the bottom
         char display_np[256] = {0};
         pthread_mutex_lock(&np_mutex);
         strncpy(display_np, now_playing, sizeof(display_np) - 1);
