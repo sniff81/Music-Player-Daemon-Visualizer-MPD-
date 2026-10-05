@@ -10,7 +10,6 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#define NUM_BARS 30      // Change to any integer (e.g. 10, 16, 24, 32, 40)
 #define BAR_GAP 1            // Space gap between columns
 #define BAR_WIDTH 2          // Number of half-block characters per bar
 #define BAR_LENGTH_SCALE 1.0f // Multiplier to adjust overall bar height/length
@@ -19,12 +18,8 @@
 
 #define GRAD_STEPS 32
 
-// Dynamic frequency range & boost tables
-int band_ranges[NUM_BARS][2];
-float band_boost[NUM_BARS];
-
 // Dynamically generate logarithmic frequency bands mirrored horizontally (Low outer, High center)
-void init_bands(int num_bars) {
+void init_bands(int num_bars, int (*band_ranges)[2], float *band_boost) {
     int half = num_bars / 2;
     int min_bin = 1;   // ~21.5 Hz
     int max_bin = 700; // ~15 kHz
@@ -179,7 +174,6 @@ int get_bottom_gradient_color(float pos_ratio) {
 
 int main() {
     setlocale(LC_ALL, "");
-    init_bands(NUM_BARS);
 
     // 2 Channels for Stereo input
     static const pa_sample_spec ss = {
@@ -228,10 +222,11 @@ int main() {
     pthread_t np_thread;
     pthread_create(&np_thread, NULL, now_playing_worker, NULL);
 
-    float heights[NUM_BARS];
-    float peaks[NUM_BARS];
-    memset(heights, 0, sizeof(heights));
-    memset(peaks, 0, sizeof(peaks));
+    int current_num_bars = 0;
+    int (*band_ranges)[2] = NULL;
+    float *band_boost = NULL;
+    float *heights = NULL;
+    float *peaks = NULL;
 
     int ch;
 
@@ -253,20 +248,39 @@ int main() {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
 
+        // Dynamically compute max bars that can fit in terminal width
+        int num_bars = (cols + BAR_GAP) / (BAR_WIDTH + BAR_GAP);
+        if (num_bars < 2) num_bars = 2;
+
+        // Reconfigure buffers on window size change
+        if (num_bars != current_num_bars) {
+            current_num_bars = num_bars;
+
+            band_ranges = realloc(band_ranges, sizeof(int[2]) * current_num_bars);
+            band_boost  = realloc(band_boost, sizeof(float) * current_num_bars);
+            heights     = realloc(heights, sizeof(float) * current_num_bars);
+            peaks       = realloc(peaks, sizeof(float) * current_num_bars);
+
+            memset(heights, 0, sizeof(float) * current_num_bars);
+            memset(peaks, 0, sizeof(float) * current_num_bars);
+
+            init_bands(current_num_bars, band_ranges, band_boost);
+        }
+
         int visual_area = rows - 2;
         int center_y = visual_area / 2;
         int max_height = center_y; 
         if (max_height < 2) max_height = 2;
 
-        int total_width = (NUM_BARS * BAR_WIDTH) + ((NUM_BARS - 1) * BAR_GAP);
+        int total_width = (current_num_bars * BAR_WIDTH) + ((current_num_bars - 1) * BAR_GAP);
         int start_x = (cols - total_width) / 2;
         if (start_x < 0) start_x = 0;
 
         erase();
 
-        int half_bars = NUM_BARS / 2;
+        int half_bars = current_num_bars / 2;
 
-        for (int i = 0; i < NUM_BARS; i++) {
+        for (int i = 0; i < current_num_bars; i++) {
             // Assign Left FFT to left side bars, Right FFT to right side bars
             fftw_complex *fft_out = (i < half_bars) ? fft_out_L : fft_out_R;
 
@@ -375,6 +389,11 @@ int main() {
     pthread_join(np_thread, NULL);
 
     endwin();
+
+    free(band_ranges);
+    free(band_boost);
+    free(heights);
+    free(peaks);
 
     fftw_destroy_plan(plan_L);
     fftw_free(fft_in_L);
