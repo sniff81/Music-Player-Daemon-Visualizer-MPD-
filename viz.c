@@ -116,15 +116,23 @@ void init_gradient_colors() {
             int g = (int)((1.0f - local_t) * palette[idx][1] + local_t * palette[idx + 1][1]);
             int b = (int)((1.0f - local_t) * palette[idx][2] + local_t * palette[idx + 1][2]);
 
+            // Top half gradient (100% lightness)
             short color_id = 16 + pos;
             short pair_id  = 1 + pos;
-
             init_color(color_id, r, g, b);
             init_pair(pair_id, color_id, -1);
+
+            // Bottom half gradient (Linear fade from 50% lightness at center to 0% at bottom)
+            float bot_lightness = 0.5f * (1.0f - t);
+            short bot_color_id = 16 + GRAD_STEPS + pos;
+            short bot_pair_id  = 1 + GRAD_STEPS + pos;
+            init_color(bot_color_id, (int)(r * bot_lightness), (int)(g * bot_lightness), (int)(b * bot_lightness));
+            init_pair(bot_pair_id, bot_color_id, -1);
         }
     } else if (has_colors() && COLORS >= 256) {
         for (int pos = 0; pos < GRAD_STEPS; pos++) {
             short pair_id = 1 + pos;
+            short bot_pair_id = 1 + GRAD_STEPS + pos;
             float t = (float)pos / (float)(GRAD_STEPS - 1);
 
             int color_code;
@@ -135,10 +143,20 @@ void init_gradient_colors() {
             else                color_code = 196; // Bright Red
 
             init_pair(pair_id, color_code, -1);
+
+            int bot_color_code;
+            if (t < 0.20f)      bot_color_code = 58;
+            else if (t < 0.45f) bot_color_code = 100;
+            else if (t < 0.70f) bot_color_code = 130;
+            else if (t < 0.88f) bot_color_code = 88;
+            else                bot_color_code = 234;
+
+            init_pair(bot_pair_id, bot_color_code, -1);
         }
     } else {
         for (int i = 1; i <= GRAD_STEPS; i++) {
             init_pair(i, COLOR_RED, -1);
+            init_pair(GRAD_STEPS + i, COLOR_RED, -1);
         }
     }
 }
@@ -149,6 +167,14 @@ int get_gradient_color(float pos_ratio) {
     if (pos_idx >= GRAD_STEPS) pos_idx = GRAD_STEPS - 1;
 
     return 1 + pos_idx;
+}
+
+int get_bottom_gradient_color(float pos_ratio) {
+    int pos_idx = (int)(pos_ratio * GRAD_STEPS);
+    if (pos_idx < 0) pos_idx = 0;
+    if (pos_idx >= GRAD_STEPS) pos_idx = GRAD_STEPS - 1;
+
+    return 1 + GRAD_STEPS + pos_idx;
 }
 
 int main() {
@@ -281,35 +307,45 @@ int main() {
 
             for (int y = 0; y < current_height; y++) {
                 float pos_ratio = (float)y / (float)max_height;
-                int color = get_gradient_color(pos_ratio);
+                int top_color = get_gradient_color(pos_ratio);
+                int bot_color = get_bottom_gradient_color(pos_ratio);
 
-                attron(COLOR_PAIR(color) | A_BOLD);
-                for (int bw = 0; bw < BAR_WIDTH; bw++) {
-                    if (center_y - y >= 0) {
+                if (center_y - y >= 0) {
+                    attron(COLOR_PAIR(top_color) | A_BOLD);
+                    for (int bw = 0; bw < BAR_WIDTH; bw++) {
                         mvprintw(center_y - y, x_pos + bw, "▀");
                     }
-                    if (center_y + y < rows - 1) {
+                    attroff(COLOR_PAIR(top_color) | A_BOLD);
+                }
+                if (center_y + y < rows - 1) {
+                    attron(COLOR_PAIR(bot_color) | A_BOLD);
+                    for (int bw = 0; bw < BAR_WIDTH; bw++) {
                         mvprintw(center_y + y, x_pos + bw, "▀");
                     }
+                    attroff(COLOR_PAIR(bot_color) | A_BOLD);
                 }
-                attroff(COLOR_PAIR(color) | A_BOLD);
             }
 
             int peak_y = (int)peaks[i];
             if (peak_y > 0 && peak_y < max_height) {
                 float peak_pos_ratio = (float)peak_y / (float)max_height;
-                int peak_color = get_gradient_color(peak_pos_ratio);
+                int top_peak_color = get_gradient_color(peak_pos_ratio);
+                int bot_peak_color = get_bottom_gradient_color(peak_pos_ratio);
 
-                attron(COLOR_PAIR(peak_color) | A_BOLD);
-                for (int bw = 0; bw < BAR_WIDTH; bw++) {
-                    if (center_y - peak_y >= 0) {
+                if (center_y - peak_y >= 0) {
+                    attron(COLOR_PAIR(top_peak_color) | A_BOLD);
+                    for (int bw = 0; bw < BAR_WIDTH; bw++) {
                         mvprintw(center_y - peak_y, x_pos + bw, "▀");
                     }
-                    if (center_y + peak_y < rows - 1) {
+                    attroff(COLOR_PAIR(top_peak_color) | A_BOLD);
+                }
+                if (center_y + peak_y < rows - 1) {
+                    attron(COLOR_PAIR(bot_peak_color) | A_BOLD);
+                    for (int bw = 0; bw < BAR_WIDTH; bw++) {
                         mvprintw(center_y + peak_y, x_pos + bw, "▀");
                     }
+                    attroff(COLOR_PAIR(bot_peak_color) | A_BOLD);
                 }
-                attroff(COLOR_PAIR(peak_color) | A_BOLD);
             }
         }
 
@@ -352,4 +388,3 @@ int main() {
 
     return 0;
 }
-
