@@ -117,7 +117,7 @@ void init_gradient_colors() {
             init_color(color_id, r, g, b);
             init_pair(pair_id, color_id, -1);
 
-            // Bottom half gradient (Linear fade from 50% lightness at center to 0% at bottom)
+            // Bottom half gradient (Linear fade from 30% lightness near center to 0% at bottom)
             float bot_lightness = 0.3f * (1.0f - t);
             short bot_color_id = 16 + GRAD_STEPS + pos;
             short bot_pair_id  = 1 + GRAD_STEPS + pos;
@@ -324,13 +324,15 @@ int main() {
                 int top_color = get_gradient_color(pos_ratio);
                 int bot_color = get_bottom_gradient_color(pos_ratio);
 
-                if (center_y - y >= 0) {
+                // Top half renders from (center_y - 1) upwards
+                if (center_y - 1 - y >= 0) {
                     attron(COLOR_PAIR(top_color) | A_BOLD);
                     for (int bw = 0; bw < BAR_WIDTH; bw++) {
-                        mvprintw(center_y - y, x_pos + bw, "▀");
+                        mvprintw(center_y - 1 - y, x_pos + bw, "▀");
                     }
                     attroff(COLOR_PAIR(top_color) | A_BOLD);
                 }
+                // Bottom half renders from center_y downwards
                 if (center_y + y < rows - 1) {
                     attron(COLOR_PAIR(bot_color) | A_BOLD);
                     for (int bw = 0; bw < BAR_WIDTH; bw++) {
@@ -346,10 +348,10 @@ int main() {
                 int top_peak_color = get_gradient_color(peak_pos_ratio);
                 int bot_peak_color = get_bottom_gradient_color(peak_pos_ratio);
 
-                if (center_y - peak_y >= 0) {
+                if (center_y - 1 - peak_y >= 0) {
                     attron(COLOR_PAIR(top_peak_color) | A_BOLD);
                     for (int bw = 0; bw < BAR_WIDTH; bw++) {
-                        mvprintw(center_y - peak_y, x_pos + bw, "▀");
+                        mvprintw(center_y - 1 - peak_y, x_pos + bw, "▀");
                     }
                     attroff(COLOR_PAIR(top_peak_color) | A_BOLD);
                 }
