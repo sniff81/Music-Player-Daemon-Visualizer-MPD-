@@ -83,13 +83,33 @@ void init_gradient_colors() {
     start_color();
     use_default_colors();
 
+    // Reversed Palette Keyframes mapped to ncurses 0..1000 scale:
+    // 0: #8de41c -> (553, 894, 110)
+    // 1: #f6287d -> (965, 157, 490)
+    // 2: #b915cc -> (725,  82, 800)
+    // 3: #210456 -> (129,  16, 337)
+    // 4: #0a0324 -> ( 39,  12, 141)
+    static const float palette[5][3] = {
+        {553.0f, 894.0f, 110.0f},
+        {965.0f, 157.0f, 490.0f},
+        {725.0f,  82.0f, 800.0f},
+        {129.0f,  16.0f, 337.0f},
+        { 39.0f,  12.0f, 141.0f}
+    };
+
     if (has_colors() && can_change_color()) {
         for (int pos = 0; pos < GRAD_STEPS; pos++) {
             float t = (float)pos / (float)(GRAD_STEPS - 1);
             
-            int r = (int)((1.0f - t) * 1000.0f + t * 118.0f);
-            int g = (int)((1.0f - t) * 78.0f   + t * 565.0f);
-            int b = (int)((1.0f - t) * 576.0f  + t * 1000.0f);
+            // Map t [0..1] across 4 segments
+            float scaled = t * 4.0f;
+            int idx = (int)scaled;
+            if (idx >= 4) idx = 3;
+            float local_t = scaled - idx;
+
+            int r = (int)((1.0f - local_t) * palette[idx][0] + local_t * palette[idx + 1][0]);
+            int g = (int)((1.0f - local_t) * palette[idx][1] + local_t * palette[idx + 1][1]);
+            int b = (int)((1.0f - local_t) * palette[idx][2] + local_t * palette[idx + 1][2]);
 
             short color_id = 16 + pos;
             short pair_id  = 1 + pos;
@@ -102,7 +122,13 @@ void init_gradient_colors() {
             short pair_id = 1 + pos;
             float t = (float)pos / (float)(GRAD_STEPS - 1);
 
-            int color_code = (t < 0.33f) ? 198 : ((t < 0.66f) ? 129 : 33);
+            int color_code;
+            if (t < 0.10f)      color_code = 118; // Neon green
+            else if (t < 0.25f) color_code = 198; // Neon pink
+            else if (t < 0.50f) color_code = 128; // Bright magenta
+            else if (t < 0.75f) color_code = 54;  // Deep violet
+            else                color_code = 234; // Deep purple-black
+
             init_pair(pair_id, color_code, -1);
         }
     } else {
@@ -182,9 +208,11 @@ int main() {
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
 
-        // Reserve space for track info at bottom
-        int max_height = rows - 3; 
-        if (max_height < 4) max_height = 4;
+        // Reserve row (rows - 1) for track info at bottom
+        int visual_area = rows - 2;
+        int center_y = visual_area / 2;
+        int max_height = center_y; 
+        if (max_height < 2) max_height = 2;
 
         int bar_width = (cols - (NUM_BARS - 1) * BAR_GAP) / NUM_BARS;
         if (bar_width < 1) bar_width = 1;
@@ -231,17 +259,24 @@ int main() {
             int current_height = (int)heights[i];
             int x_pos = start_x + i * (bar_width + BAR_GAP);
 
+            // Render bars growing symmetrically UP and DOWN from center_y
             for (int y = 0; y < current_height; y++) {
                 float pos_ratio = (float)y / (float)max_height;
                 int color = get_gradient_color(pos_ratio);
 
                 attron(COLOR_PAIR(color) | A_BOLD);
                 for (int bw = 0; bw < bar_width; bw++) {
-                    mvprintw(rows - 3 - y, x_pos + bw, "▀");
+                    if (center_y - y >= 0) {
+                        mvprintw(center_y - y, x_pos + bw, "▀");
+                    }
+                    if (center_y + y < rows - 1) {
+                        mvprintw(center_y + y, x_pos + bw, "▀");
+                    }
                 }
                 attroff(COLOR_PAIR(color) | A_BOLD);
             }
 
+            // Render mirrored peak indicators
             int peak_y = (int)peaks[i];
             if (peak_y > 0 && peak_y < max_height) {
                 float peak_pos_ratio = (float)peak_y / (float)max_height;
@@ -249,7 +284,12 @@ int main() {
 
                 attron(COLOR_PAIR(peak_color) | A_BOLD);
                 for (int bw = 0; bw < bar_width; bw++) {
-                    mvprintw(rows - 3 - peak_y, x_pos + bw, "▀");
+                    if (center_y - peak_y >= 0) {
+                        mvprintw(center_y - peak_y, x_pos + bw, "▀");
+                    }
+                    if (center_y + peak_y < rows - 1) {
+                        mvprintw(center_y + peak_y, x_pos + bw, "▀");
+                    }
                 }
                 attroff(COLOR_PAIR(peak_color) | A_BOLD);
             }
