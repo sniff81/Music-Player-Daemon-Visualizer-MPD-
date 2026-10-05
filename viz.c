@@ -10,7 +10,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#define NUM_BARS 30          // Change to any integer (e.g. 10, 16, 24, 32, 40)
+#define NUM_BARS 30         // Change to any integer (e.g. 10, 16, 24, 32, 40)
 #define BAR_GAP 1            // Space gap between columns
 #define BAR_WIDTH 2          // Number of half-block characters per bar
 #define BAR_LENGTH_SCALE 1.0f // Multiplier to adjust overall bar height/length
@@ -96,24 +96,17 @@ void init_gradient_colors() {
     start_color();
     use_default_colors();
 
-    // Palette Keyframes mapped across ncurses 0..1000 RGB scale:
-    // 0: YellowGreen -> #8de41c (553, 894, 110)
-    // 1: Yellow      -> #ffff00 (1000, 1000, 0)
-    // 2: Orange      -> #ffa500 (1000, 647, 0)
-    // 3: Orange-Red  -> #ff4500 (1000, 271, 0)
-    // 4: Bright Red  -> #ff0000 (1000, 0, 0)
     static const float palette[5][3] = {
-        {553.0f,  894.0f, 110.0f},
-        {1000.0f, 1000.0f,   0.0f},
-        {1000.0f,  647.0f,   0.0f},
-        {1000.0f,  271.0f,   0.0f},
-        {1000.0f,    0.0f,   0.0f}
+        {553.0f,  894.0f, 110.0f}, // YellowGreen -> #8de41c
+        {1000.0f, 1000.0f,   0.0f}, // Yellow      -> #ffff00
+        {1000.0f,  647.0f,   0.0f}, // Orange      -> #ffa500
+        {1000.0f,  271.0f,   0.0f}, // Orange-Red  -> #ff4500
+        {1000.0f,    0.0f,   0.0f}  // Bright Red  -> #ff0000
     };
 
     if (has_colors() && can_change_color()) {
         for (int pos = 0; pos < GRAD_STEPS; pos++) {
             float t = (float)pos / (float)(GRAD_STEPS - 1);
-            
             float scaled = t * 4.0f;
             int idx = (int)scaled;
             if (idx >= 4) idx = 3;
@@ -162,15 +155,16 @@ int main() {
     setlocale(LC_ALL, "");
     init_bands(NUM_BARS);
 
+    // 2 Channels for Stereo input
     static const pa_sample_spec ss = {
         .format = PA_SAMPLE_S16LE,
         .rate = SAMPLE_RATE,
-        .channels = 1
+        .channels = 2
     };
 
     int pa_error;
     pa_simple *pa_stream = pa_simple_new(
-        NULL, "Audio Visualizer", PA_STREAM_RECORD, 
+        NULL, "Stereo Audio Visualizer", PA_STREAM_RECORD, 
         NULL, "Spectrum", &ss, NULL, NULL, &pa_error
     );
 
@@ -179,10 +173,17 @@ int main() {
         return 1;
     }
 
-    double *fft_in = fftw_malloc(sizeof(double) * BUFFER_SIZE);
-    fftw_complex *fft_out = fftw_malloc(sizeof(fftw_complex) * (BUFFER_SIZE / 2 + 1));
-    fftw_plan plan = fftw_plan_dft_r2c_1d(BUFFER_SIZE, fft_in, fft_out, FFTW_ESTIMATE);
-    int16_t pcm_buffer[BUFFER_SIZE];
+    // FFT setups for Left & Right channels
+    double *fft_in_L = fftw_malloc(sizeof(double) * BUFFER_SIZE);
+    fftw_complex *fft_out_L = fftw_malloc(sizeof(fftw_complex) * (BUFFER_SIZE / 2 + 1));
+    fftw_plan plan_L = fftw_plan_dft_r2c_1d(BUFFER_SIZE, fft_in_L, fft_out_L, FFTW_ESTIMATE);
+
+    double *fft_in_R = fftw_malloc(sizeof(double) * BUFFER_SIZE);
+    fftw_complex *fft_out_R = fftw_malloc(sizeof(fftw_complex) * (BUFFER_SIZE / 2 + 1));
+    fftw_plan plan_R = fftw_plan_dft_r2c_1d(BUFFER_SIZE, fft_in_R, fft_out_R, FFTW_ESTIMATE);
+
+    // Interleaved stereo buffer (2 * BUFFER_SIZE samples)
+    int16_t pcm_buffer[BUFFER_SIZE * 2];
 
     initscr();
     cbreak();
@@ -213,12 +214,15 @@ int main() {
             break;
         }
 
+        // De-interleave PCM stereo audio and apply Hanning window
         for (int i = 0; i < BUFFER_SIZE; i++) {
             double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (BUFFER_SIZE - 1)));
-            fft_in[i] = (pcm_buffer[i] / 32768.0) * window;
+            fft_in_L[i] = (pcm_buffer[2 * i]     / 32768.0) * window; // Left channel
+            fft_in_R[i] = (pcm_buffer[2 * i + 1] / 32768.0) * window; // Right channel
         }
 
-        fftw_execute(plan);
+        fftw_execute(plan_L);
+        fftw_execute(plan_R);
 
         int rows, cols;
         getmaxyx(stdscr, rows, cols);
@@ -234,7 +238,12 @@ int main() {
 
         erase();
 
+        int half_bars = NUM_BARS / 2;
+
         for (int i = 0; i < NUM_BARS; i++) {
+            // Assign Left FFT to left side bars, Right FFT to right side bars
+            fftw_complex *fft_out = (i < half_bars) ? fft_out_L : fft_out_R;
+
             double band_sum = 0;
             int min_bin = band_ranges[i][0];
             int max_bin = band_ranges[i][1];
@@ -330,9 +339,15 @@ int main() {
     pthread_join(np_thread, NULL);
 
     endwin();
-    fftw_destroy_plan(plan);
-    fftw_free(fft_in);
-    fftw_free(fft_out);
+
+    fftw_destroy_plan(plan_L);
+    fftw_free(fft_in_L);
+    fftw_free(fft_out_L);
+
+    fftw_destroy_plan(plan_R);
+    fftw_free(fft_in_R);
+    fftw_free(fft_out_R);
+
     pa_simple_free(pa_stream);
 
     return 0;
