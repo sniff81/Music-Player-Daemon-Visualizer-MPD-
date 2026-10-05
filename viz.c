@@ -10,7 +10,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#define NUM_BARS 30         // Change to any integer (e.g. 10, 16, 24, 32, 40)
+#define NUM_BARS 30      // Change to any integer (e.g. 10, 16, 24, 32, 40)
 #define BAR_GAP 1            // Space gap between columns
 #define BAR_WIDTH 2          // Number of half-block characters per bar
 #define BAR_LENGTH_SCALE 1.0f // Multiplier to adjust overall bar height/length
@@ -123,7 +123,7 @@ void init_gradient_colors() {
             init_pair(pair_id, color_id, -1);
 
             // Bottom half gradient (Linear fade from 50% lightness at center to 0% at bottom)
-            float bot_lightness = 0.5f * (1.0f - t);
+            float bot_lightness = 0.3f * (1.0f - t);
             short bot_color_id = 16 + GRAD_STEPS + pos;
             short bot_pair_id  = 1 + GRAD_STEPS + pos;
             init_color(bot_color_id, (int)(r * bot_lightness), (int)(g * bot_lightness), (int)(b * bot_lightness));
